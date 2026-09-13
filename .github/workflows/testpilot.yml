@@ -1,0 +1,64 @@
+name: TestPilot
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testpilot-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    # Private tool checkout needs a secret, unavailable to fork PRs.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout React
+        uses: actions/checkout@v4
+        with:
+          path: react
+          persist-credentials: false
+
+      - name: Checkout TestPilot
+        uses: actions/checkout@v4
+        with:
+          repository: yassinecodes201/TestPilot
+          token: ${{ secrets.TESTPILOT_READ_TOKEN }}
+          path: testpilot
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: react/.nvmrc
+
+      - name: Install TestPilot
+        run: npm ci --prefix testpilot/tools/universal-coverage
+
+      - name: Install React dependencies
+        working-directory: react
+        run: yarn install --frozen-lockfile
+
+      - name: Configure TestPilot for React
+        working-directory: react
+        shell: bash
+        run: |
+          cat > testpilot.github.yml <<'YAML'
+          adapter: custom
+          discover: node ../testpilot/tools/universal-coverage/src/runners/react-jest.js list
+          run: node ../testpilot/tools/universal-coverage/src/runners/react-jest.js run "{{TEST}}" "{{COVERAGE_PATH}}"
+          full: node scripts/jest/jest-cli.js --ci --sourceMaps --runInBand --watch=false
+          coverage:
+            format: c8
+            path: coverage/coverage-final.json
+          YAML
+
+      - name: Run React source suite through TestPilot
+        working-directory: react
+        run: node ../testpilot/tools/universal-coverage/src/index.js run --config testpilot.github.yml --full
