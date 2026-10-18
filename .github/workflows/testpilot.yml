@@ -1,0 +1,141 @@
+name: TestPilot
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: testpilot-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    # Private tool checkout needs a secret, unavailable to fork PRs.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout React
+        uses: actions/checkout@v4
+        with:
+          path: react
+          persist-credentials: false
+
+      - name: Checkout TestPilot
+        uses: actions/checkout@v4
+        with:
+          repository: yassinecodes201/TestPilot
+          token: ${{ secrets.TESTPILOT_READ_TOKEN }}
+          path: testpilot
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: react/.nvmrc
+
+      - name: Install TestPilot
+        run: npm ci --prefix testpilot/tools/universal-coverage
+
+      - name: Install React dependencies
+        working-directory: react
+        run: yarn install --frozen-lockfile
+
+      - name: Configure TestPilot for React
+        working-directory: react
+        shell: bash
+        run: |
+          cat > testpilot.github.yml <<'YAML'
+          adapter: custom
+          discover: node ../testpilot/tools/universal-coverage/src/runners/react-jest.js list
+          run: node ../testpilot/tools/universal-coverage/src/runners/react-jest.js run "{{TEST}}" "{{COVERAGE_PATH}}"
+          full: yarn test --ci --sourceMaps --runInBand --watch=false
+          coverage:
+            format: c8
+            path: coverage/coverage-final.json
+          YAML
+
+      - name: Generate coverage map from passing tests
+        working-directory: react
+        run: >-
+          node ../testpilot/tools/universal-coverage/src/index.js map
+          --config testpilot.github.yml
+          --jobs 1
+          --continue-on-test-failure true
+          --out maps/universal_coverage_map.json
+
+      - name: Upload coverage map
+        uses: actions/upload-artifact@v4
+        with:
+          name: react-coverage-map
+          path: react/maps/universal_coverage_map.json
+          if-no-files-found: error
+
+      - name: Save pull request diff for test selection
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                per_page: 100
+              }
+            );
+            const diff = files.map(file => ({
+              filename: file.filename,
+              status: file.status,
+              patch: file.patch || null
+            }));
+            fs.writeFileSync(
+              path.join(process.env.GITHUB_WORKSPACE, 'react', 'pr_files.json'),
+              JSON.stringify(diff, null, 2)
+            );
+            core.info(`Saved ${diff.length} changed file(s) for TestPilot.`);
+
+      - name: Select tests covering changed React lines
+        if: github.event_name == 'pull_request'
+        id: select_tests
+        working-directory: react
+        shell: bash
+        run: |
+          node ../testpilot/tools/universal-coverage/src/index.js select \
+            --map maps/universal_coverage_map.json \
+            --pr pr_files.json \
+            --out selected_tests.txt
+          count="$(wc -l < selected_tests.txt | tr -d ' ')"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Selected $count test(s)."
+
+      - name: Run selected React tests
+        if: github.event_name == 'pull_request' && steps.select_tests.outputs.count != '0'
+        working-directory: react
+        run: >-
+          node ../testpilot/tools/universal-coverage/src/index.js run
+          --config testpilot.github.yml
+          --tests selected_tests.txt
+          --skip-setup true
+
+      - name: Report empty selection
+        if: github.event_name == 'pull_request' && steps.select_tests.outputs.count == '0'
+        run: |
+          echo "::warning::No mapped tests cover the changed lines; no tests were selected or executed."
+          echo "No mapped tests covered the changed lines. Review the map or run the full suite when the change affects behavior." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload selected test list
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: react-selected-tests
+          path: react/selected_tests.txt
+          if-no-files-found: error
