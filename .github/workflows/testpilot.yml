@@ -59,6 +59,18 @@ jobs:
             path: coverage/coverage-final.json
           YAML
 
-      - name: Run React source suite through TestPilot
+      - name: Generate coverage map from passing tests
         working-directory: react
-        run: node ../testpilot/tools/universal-coverage/src/index.js run --config testpilot.github.yml --full
+        run: >-
+          node ../testpilot/tools/universal-coverage/src/index.js map
+          --config testpilot.github.yml
+          --jobs 1
+          --continue-on-test-failure true
+          --out maps/universal_coverage_map.json
+
+      - name: Upload coverage map
+        uses: actions/upload-artifact@v4
+        with:
+          name: react-coverage-map
+          path: react/maps/universal_coverage_map.json
+          if-no-files-found: error
