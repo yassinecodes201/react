@@ -78,7 +78,6 @@ jobs:
 
       - name: Save pull request diff for test selection
         if: github.event_name == 'pull_request'
-        id: pr_diff
         uses: actions/github-script@v7
         with:
           script: |
@@ -102,26 +101,36 @@ jobs:
               path.join(process.env.GITHUB_WORKSPACE, 'react', 'pr_files.json'),
               JSON.stringify(diff, null, 2)
             );
-            core.setOutput('changed_files', String(diff.length));
             core.info(`Saved ${diff.length} changed file(s) for TestPilot.`);
 
       - name: Select tests covering changed React lines
         if: github.event_name == 'pull_request'
+        id: select_tests
         working-directory: react
-        run: >-
-          node ../testpilot/tools/universal-coverage/src/index.js select
-          --map maps/universal_coverage_map.json
-          --pr pr_files.json
-          --out selected_tests.txt
+        shell: bash
+        run: |
+          node ../testpilot/tools/universal-coverage/src/index.js select \
+            --map maps/universal_coverage_map.json \
+            --pr pr_files.json \
+            --out selected_tests.txt
+          count="$(wc -l < selected_tests.txt | tr -d ' ')"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Selected $count test(s)."
 
       - name: Run selected React tests
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.select_tests.outputs.count != '0'
         working-directory: react
         run: >-
           node ../testpilot/tools/universal-coverage/src/index.js run
           --config testpilot.github.yml
           --tests selected_tests.txt
           --skip-setup true
+
+      - name: Report empty selection
+        if: github.event_name == 'pull_request' && steps.select_tests.outputs.count == '0'
+        run: |
+          echo "::warning::No mapped tests cover the changed lines; no tests were selected or executed."
+          echo "No mapped tests covered the changed lines. Review the map or run the full suite when the change affects behavior." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload selected test list
         if: github.event_name == 'pull_request'
