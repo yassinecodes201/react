@@ -1,9 +1,30 @@
-# Copy to testpilot.yml in the repository being tested, then supply your commands.
 adapter: custom
-setup: ./ci/install.sh
-discover: ./ci/list-tests.sh
-run: ./ci/run-test.sh "{{TEST}}" "{{COVERAGE_PATH}}"
-full: ./ci/run-all.sh
+
+setup: yarn install --frozen-lockfile
+
+discover: node ../testpilot/tools/universal-coverage/src/runners/react-jest.js list
+
+run: >-
+  yarn --silent test
+  --ci
+  --runInBand
+  --watch=false
+  -r=experimental
+  --env=development
+  --sourceMaps
+  --coverage
+  --coverageReporters=json
+  --coverageDirectory="{{COVERAGE_DIR}}"
+  --runTestsByPath "{{TEST}}"
+
+full: >-
+  yarn test
+  --ci
+  --runInBand
+  --watch=false
+  -r=experimental
+  --env=development
+
 coverage:
-  format: lcov
-  path: coverage/lcov.info
+  format: c8
+  path: coverage/coverage-final.json
