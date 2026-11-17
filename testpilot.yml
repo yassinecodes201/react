@@ -1,0 +1,7 @@
+adapter: custom
+discover: node ../testpilot/tools/universal-coverage/src/runners/react-jest.js list
+run: node ../testpilot/tools/universal-coverage/src/runners/react-jest.js run "{{TEST}}" "{{COVERAGE_PATH}}"
+full: node scripts/jest/jest-cli.js --ci --watch=false --maxWorkers=2
+coverage:
+  format: c8
+  path: coverage/coverage-final.json
